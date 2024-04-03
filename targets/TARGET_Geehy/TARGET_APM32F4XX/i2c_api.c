@@ -190,9 +190,85 @@ void i2c_frequency(i2c_t *obj, int hz)
     i2cConfigStruct.clockSpeed = hz;
 
     I2C_Config(i2c, &i2cConfigStruct);
+	
+	if (i2c == I2C1)
+	{
+		NVIC_EnableIRQRequest(I2C1_EV_IRQn,1,0);
+		I2C_EnableInterrupt(I2C1,I2C_INT_EVT);
+	}
+	else if (i2c == I2C2)
+	{
+		NVIC_EnableIRQRequest(I2C2_EV_IRQn,1,0);
+		I2C_EnableInterrupt(I2C2,I2C_INT_EVT);
+	}
+	else if (i2c == I2C3)
+	{
+		NVIC_EnableIRQRequest(I2C3_EV_IRQn,1,0);
+		I2C_EnableInterrupt(I2C3,I2C_INT_EVT);
+	}
 
     /* enable I2C peripheral */
     I2C_Enable(i2c);
+}
+
+ /*!
+ * @brief     I2C1_EV_IRQHandler
+ *
+ * @param     None
+ *
+ * @retval    None
+ */
+void I2C1_EV_IRQHandler(void)
+{
+	if (I2C_ReadIntFlag(I2C1,I2C_INT_FLAG_ADDR) == SET)
+	{
+		*(__IO uint16_t*)I2C1->STS2;
+		I2C_ClearIntFlag(I2C1,I2C_INT_FLAG_ADDR);
+	}
+	if (I2C_ReadIntFlag(I2C1,I2C_INT_FLAG_STOP))
+	{
+		I2C_Enable(I2C1);
+	}
+}
+
+ /*!
+ * @brief     I2C2_EV_IRQHandler
+ *
+ * @param     None
+ *
+ * @retval    None
+ */
+void I2C2_EV_IRQHandler(void)
+{
+	if (I2C_ReadIntFlag(I2C2,I2C_INT_FLAG_ADDR) == SET)
+	{
+		*(__IO uint16_t*)I2C2->STS2;
+		I2C_ClearIntFlag(I2C2,I2C_INT_FLAG_ADDR);
+	}
+	if (I2C_ReadIntFlag(I2C2,I2C_INT_FLAG_STOP))
+	{
+		I2C_Enable(I2C2);
+	}
+}
+
+ /*!
+ * @brief     I2C3_EV_IRQHandler
+ *
+ * @param     None
+ *
+ * @retval    None
+ */
+void I2C3_EV_IRQHandler(void)
+{
+	if (I2C_ReadIntFlag(I2C3,I2C_INT_FLAG_ADDR) == SET)
+	{
+		*(__IO uint16_t*)I2C3->STS2;
+		I2C_ClearIntFlag(I2C3,I2C_INT_FLAG_ADDR);
+	}
+	if (I2C_ReadIntFlag(I2C3,I2C_INT_FLAG_STOP))
+	{
+		I2C_Enable(I2C3);
+	}
 }
 
  /*!
@@ -338,13 +414,19 @@ int i2c_byte_write(i2c_t *obj, int data)
     /* wait until the byte is transmitted */
     timeout = TIMEOUT_FLAG;
     while (((I2C_ReadStatusFlag(i2c, I2C_FLAG_TXBE)) == RESET) && \
-            ((I2C_ReadStatusFlag(i2c, I2C_FLAG_BTC)) == RESET))
+            ((I2C_ReadStatusFlag(i2c, I2C_FLAG_BTC)) == RESET) && \
+			((I2C_ReadStatusFlag(i2c, I2C_FLAG_ADDR)) == RESET))
     {
         if ((timeout--) == 0)
         {
             return 2;
         }
     }
+	
+	if ((I2C_ReadStatusFlag(i2c, I2C_FLAG_ADDR)) != RESET)
+	{
+		I2C_ClearStatusFlag(i2c, I2C_FLAG_ADDR);
+	}
 
     return 1;
 }
@@ -413,12 +495,13 @@ int i2c_read(i2c_t *obj, int address, char *data, int length, int stop)
     if (obj_s->global_trans_option == I2C_FIRST_AND_LAST_FRAME || obj_s->global_trans_option == I2C_FIRST_FRAME ||
             obj_s->previous_state_mode != I2C_STATE_MASTER_BUSY_RX)
     {
+		I2C_DisableInterrupt(i2c,I2C_INT_EVT);
         /* generate a START condition */
         I2C_EnableGenerateStart(i2c);
 
         /* ensure the i2c has been started successfully */
         timeout = TIMEOUT_FLAG;
-        while ((I2C_ReadStatusFlag(i2c, I2C_FLAG_START)) == RESET)
+        while (!(I2C_ReadEventStatus(i2c, I2C_EVENT_MASTER_MODE_SELECT)))
         {
             if ((timeout--) == 0)
             {
@@ -429,18 +512,6 @@ int i2c_read(i2c_t *obj, int address, char *data, int length, int stop)
 
         /* send slave address */
         I2C_Tx7BitAddress(i2c, address, I2C_DIRECTION_RX);
-
-        /* wait until I2C_FLAG_ADDSEND flag is set */
-        timeout = 0;
-        while (!I2C_ReadStatusFlag(i2c, I2C_FLAG_ADDR)) 
-        {
-            timeout++;
-            if (timeout > 100000)
-            {
-                i2c_stop(obj);
-                return I2C_ERROR_NO_SLAVE;
-            }
-        }
 
         if (length == 1)
         {
@@ -462,16 +533,15 @@ int i2c_read(i2c_t *obj, int address, char *data, int length, int stop)
         }
 
         timeout = 0;
-        /* wait until I2C_FLAG_ADDSEND flag is set */
-        while (!I2C_ReadStatusFlag(i2c, I2C_FLAG_ADDR)) {
+        while (!I2C_ReadEventStatus(i2c, I2C_EVENT_MASTER_RECEIVER_MODE_SELECTED))
+        {
             timeout++;
-            if (timeout > 100000) {
+            if (timeout > 100000)
+            {
                 i2c_stop(obj);
                 return I2C_ERROR_NO_SLAVE;
             }
         }
-
-        I2C_ClearStatusFlag(i2c, I2C_FLAG_ADDR);
     }
 
     obj_s->state = (OP_STATE_T)I2C_STATE_MASTER_BUSY_RX;
@@ -480,15 +550,15 @@ int i2c_read(i2c_t *obj, int address, char *data, int length, int stop)
     {
         if (length > 2 && count == length - 3)
         {
-            while (I2C_ReadStatusFlag(i2c, I2C_FLAG_BTC) == RESET);
+            while (I2C_ReadEventStatus(i2c, I2C_EVENT_MASTER_BYTE_RECEIVED) == RESET);
             I2C_DisableAcknowledge(i2c);
         }
         else if (length == 2 && count == 0)
         {
-            while (I2C_ReadStatusFlag(i2c, I2C_FLAG_BTC) == RESET);
+            while (I2C_ReadEventStatus(i2c, I2C_EVENT_MASTER_BYTE_RECEIVED) == RESET);
         }
 
-        while (I2C_ReadStatusFlag(i2c, I2C_FLAG_RXBNE) == RESET);
+        while (I2C_ReadEventStatus(i2c, I2C_EVENT_MASTER_BYTE_RECEIVED) == RESET);
         data[count] = I2C_RxData(i2c);
     }
 
@@ -497,8 +567,10 @@ int i2c_read(i2c_t *obj, int address, char *data, int length, int stop)
     /* if not sequential read, then send stop */
     if (stop)
     {
-        i2c_stop(obj);
+        I2C_EnableGenerateStop(i2c);
     }
+	
+	I2C_EnableInterrupt(i2c,I2C_INT_EVT);
 
     return count;
 }
@@ -566,12 +638,13 @@ int i2c_write(i2c_t *obj, int address, const char *data, int length, int stop)
     if (obj_s->global_trans_option == I2C_FIRST_AND_LAST_FRAME || obj_s->global_trans_option == I2C_FIRST_FRAME || \
             obj_s->previous_state_mode != I2C_STATE_MASTER_BUSY_TX)
     {
+		I2C_DisableInterrupt(i2c,I2C_INT_EVT);
         /* generate a START condition */
         I2C_EnableGenerateStart(i2c);
 
         /* ensure the i2c has been started successfully */
         timeout = TIMEOUT_FLAG;
-        while ((I2C_ReadStatusFlag(i2c, I2C_FLAG_START)) == RESET)
+        while (!(I2C_ReadEventStatus(i2c, I2C_EVENT_MASTER_MODE_SELECT)))
         {
             if ((timeout--) == 0) {
                 i2c_stop(obj);
@@ -583,8 +656,8 @@ int i2c_write(i2c_t *obj, int address, const char *data, int length, int stop)
         I2C_Tx7BitAddress(i2c, address, I2C_DIRECTION_TX);
 
         timeout = 0;
-        /* wait until I2C_FLAG_ADDSEND flag is set */
-        while (!I2C_ReadStatusFlag(i2c, I2C_FLAG_ADDR))
+        /* wait until I2C_EVENT_MASTER_TRANSMITTER_MODE_SELECTED flag is set */
+        while (!I2C_ReadEventStatus(i2c, I2C_EVENT_MASTER_TRANSMITTER_MODE_SELECTED))
         {
             timeout++;
             if (timeout > 100000)
@@ -593,20 +666,34 @@ int i2c_write(i2c_t *obj, int address, const char *data, int length, int stop)
                 return I2C_ERROR_NO_SLAVE;
             }
         }
-
-        /* clear ADDSEND */
-        I2C_ClearStatusFlag(i2c, I2C_FLAG_ADDR);
     }
 
     obj_s->state = (OP_STATE_T)I2C_STATE_MASTER_BUSY_TX;
 
     for (count = 0; count < length; count++)
     {
-        status = (APM_STATUS_T)i2c_byte_write(obj, data[count]);
-        if (status != 1)
+		I2C_TxData(i2c, data[count]);
+		
+		timeout = 0;
+		while (!I2C_ReadEventStatus(I2C1, I2C_EVENT_MASTER_BYTE_TRANSMITTING))
         {
-            i2c_stop(obj);
-            return count;
+            timeout++;
+            if (timeout > 100000)
+            {
+                i2c_stop(obj);
+                return count;
+            }
+        }
+		
+		timeout = 0;
+		while (!I2C_ReadEventStatus(I2C1, I2C_EVENT_MASTER_BYTE_TRANSMITTED))
+        {
+            timeout++;
+            if (timeout > 100000)
+            {
+                i2c_stop(obj);
+                return count;
+            }
         }
     }
 
@@ -615,8 +702,9 @@ int i2c_write(i2c_t *obj, int address, const char *data, int length, int stop)
     /* if not sequential write, then send stop */
     if (stop)
     {
-        i2c_stop(obj);
+        I2C_EnableGenerateStop(i2c);
     }
+	I2C_EnableInterrupt(i2c,I2C_INT_EVT);
 
     return count;
 }
@@ -759,26 +847,14 @@ int i2c_slave_read(i2c_t *obj, char *data, int length)
     int count = 0;
     int timeout = 0;
 
+	I2C_DisableInterrupt(i2c,I2C_INT_EVT);
     I2C_EnableAcknowledge(i2c);
-
-    /* wait until ADDSEND bit is set */
-    while (!I2C_ReadStatusFlag(i2c, I2C_FLAG_ADDR))
-    {
-        timeout++;
-        if (timeout > 100000)
-        {
-            return -1;
-        }
-    }
-    /* clear ADDSEND bit */
-
-    I2C_ClearStatusFlag(i2c, I2C_FLAG_ADDR);
-
+	
     while (length > 0)
     {
         /* wait until the RBNE bit is set */
         timeout = 0;
-        while (!I2C_ReadStatusFlag(i2c, I2C_FLAG_RXBNE))
+        while (!I2C_ReadEventStatus(i2c, I2C_EVENT_SLAVE_BYTE_RECEIVED))
         {
             timeout++;
             if (timeout > 100000)
@@ -793,10 +869,10 @@ int i2c_slave_read(i2c_t *obj, char *data, int length)
     }
     /* wait until the STPDET bit is set */
     timeout = 0;
-    while (!I2C_ReadStatusFlag(i2c, I2C_FLAG_STOP))
+    while (!I2C_ReadEventStatus(i2c, I2C_EVENT_SLAVE_STOP_DETECTED))
     {
         timeout++;
-        if (timeout > 100)
+        if (timeout > 10000)
         {
             return count;
         }
@@ -806,6 +882,7 @@ int i2c_slave_read(i2c_t *obj, char *data, int length)
     I2C_Enable(i2c);
 
     I2C_DisableAcknowledge(i2c);
+	I2C_EnableInterrupt(i2c,I2C_INT_EVT);
 
     return count;
 }
@@ -828,9 +905,10 @@ int i2c_slave_write(i2c_t *obj, const char *data, int length)
     int count = 0;
     int timeout = 0;
 
+	I2C_DisableInterrupt(i2c,I2C_INT_EVT);
     I2C_EnableAcknowledge(i2c);
     /* wait until ADDSEND bit is set */
-    while (!I2C_ReadStatusFlag(i2c, I2C_FLAG_ADDR))
+    while (!I2C_ReadEventStatus(i2c, I2C_EVENT_SLAVE_TRANSMITTER_ADDRESS_MATCHED))
     {
         timeout++;
         if (timeout > 100000)
@@ -838,13 +916,16 @@ int i2c_slave_write(i2c_t *obj, const char *data, int length)
             return -1;
         }
     }
-    /* clear ADDSEND bit */
-    I2C_ClearStatusFlag(i2c, I2C_FLAG_ADDR);
     while (length > 0)
     {
         /* wait until the TBE bit is set */
-        timeout = 0;
-        while (!I2C_ReadStatusFlag(i2c, I2C_FLAG_TXBE))
+        I2C_TxData(i2c, *data);
+        data++;
+        length--;
+        count++;
+		
+		timeout = 0;
+		while (!I2C_ReadEventStatus(i2c, I2C_EVENT_SLAVE_BYTE_TRANSMITTED))
         {
             timeout++;
             if (timeout > 100000)
@@ -852,14 +933,10 @@ int i2c_slave_write(i2c_t *obj, const char *data, int length)
                 return -1;
             }
         }
-        I2C_TxData(i2c, *data);
-        data++;
-        length--;
-        count++;
     }
     /* the master doesn't acknowledge for the last byte */
     timeout = 0;
-    while (!I2C_ReadStatusFlag(i2c, I2C_FLAG_AE))
+    while (!I2C_ReadEventStatus(i2c, I2C_EVENT_SLAVE_ACK_FAILURE))
     {
         timeout++;
         if (timeout > 100000)
@@ -871,6 +948,8 @@ int i2c_slave_write(i2c_t *obj, const char *data, int length)
     I2C_ClearStatusFlag(i2c, I2C_FLAG_AE);
     /* disable acknowledge */
     I2C_DisableAcknowledge(i2c);
+	
+	I2C_EnableInterrupt(i2c,I2C_INT_EVT);
 
     return count;
 }
