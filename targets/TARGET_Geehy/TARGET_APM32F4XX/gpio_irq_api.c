@@ -56,7 +56,7 @@ static void handle_interrupt(uint32_t irq_index)
     gpio_eint_struct *gpio_eint = &eint_arr[irq_index];
 
     GPIO_T* gpio = (GPIO_T*)(gpio_eint->eint_gpio);
-    uint32_t pin = (uint32_t)(1 << gpio_eint->eint_pin);
+    uint32_t pin = (uint32_t)(1 << APM_PIN_GET(gpio_eint->eint_pin));
 
     if (EINT_ReadIntFlag((EINT_LINE_T)pin) != RESET)
     {
